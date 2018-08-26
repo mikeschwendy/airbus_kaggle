@@ -204,3 +204,29 @@ class BoxedDataset(Dataset):
             cropped_img = img[minrow:maxrow,mincol:maxcol,:]
             resized_img = transform.resize(cropped_img, (64,64), mode='reflect', anti_aliasing=True)                     
         return transforms.functional.to_tensor(resized_img), label
+
+class BoxDetections(Dataset):
+    def __init__(self,imgdir,imgsize,data):
+        super().__init__()
+        self.imgdir = imgdir
+        self.imgsize = imgsize
+        self.box_image_ids = data['box_image_ids']
+        self.L1 = data['L1']
+        self.L2 = data['L2']
+        self.R0 = data['C0'] # accidently switched when saved
+        self.C0 = data['R0'] # accidently switched when saved
+        self.theta = data['theta']
+        self.all_image_ids = data['all_image_ids']
+        self.num_ships = data['num_ships']
+        self.total_ships = sum(self.num_ships)
+        self.total_imgs = len(self.all_image_ids)
+    def __len__(self):
+        return self.total_imgs
+    def __getitem__(self,idx):
+        img_path = os.path.join(self.imgdir,self.all_image_ids[idx],'.jpg')
+        img = np.array(Image.open(img_path)) 
+        # Channels-first
+        img = np.transpose(img, (2, 0, 1))
+        # As pytorch tensor
+        img = torch.from_numpy(img).float()
+        return img  

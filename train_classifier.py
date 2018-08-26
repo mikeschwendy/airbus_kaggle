@@ -27,7 +27,6 @@ from utils.parse_config import *
 args = ['--image_folder','/airbus/train',
         '--box_file','/airbus/box_data.pickle',
         '--model_config_path','./PyTorch-YOLOv3_lite/config/classifier.cfg',
-        '--weights_path','./PyTorch-YOLOv3_lite/weights/classifier.weights',
         '--checkpoint_dir','/output',
         '--img_size','64',
         '--epochs','30',
@@ -39,11 +38,9 @@ parser.add_argument('--image_folder', type=str, default='data/samples', help='pa
 parser.add_argument('--box_file', type=str, default='data/samples', help='path to box data')
 parser.add_argument('--batch_size', type=int, default=16, help='size of each image batch')
 parser.add_argument('--model_config_path', type=str, default='config/yolov3.cfg', help='path to model config file')
-#parser.add_argument('--data_config_path', type=str, default='config/coco.data', help='path to data config file')
 parser.add_argument('--weights_path', type=str, default='weights/yolov3.weights', help='path to weights file')
-#parser.add_argument('--class_path', type=str, default='data/coco.names', help='path to class label file')
-#parser.add_argument('--conf_thres', type=float, default=0.8, help='object confidence threshold')
-#parser.add_argument('--nms_thres', type=float, default=0.4, help='iou thresshold for non-maximum suppression')
+parser.add_argument('--conf_thres', type=float, default=0.8, help='object confidence threshold')
+parser.add_argument('--nms_thres', type=float, default=0.4, help='iou thresshold for non-maximum suppression')
 parser.add_argument('--n_cpu', type=int, default=0, help='number of cpu threads to use during batch generation')
 parser.add_argument('--img_size', type=int, default=416, help='size of each image dimension')
 parser.add_argument('--checkpoint_interval', type=int, default=1, help='interval between saving model weights')
@@ -53,15 +50,6 @@ opt = parser.parse_args(args)
 print(opt)
 
 cuda = torch.cuda.is_available() and opt.use_cuda
-
-os.makedirs('output', exist_ok=True)
-os.makedirs('checkpoints', exist_ok=True)
-
-#classes = load_classes(opt.class_path)
-
-# Get data configuration
-#data_config     = parse_data_config(opt.data_config_path)
-#train_path      = data_config['train']
 
 # Get hyper parameters
 hyperparams     = parse_model_config(opt.model_config_path)[0]
