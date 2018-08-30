@@ -220,13 +220,35 @@ class BoxDetections(Dataset):
         self.num_ships = data['num_ships']
         self.total_ships = sum(self.num_ships)
         self.total_imgs = len(self.all_image_ids)
+        self.max_objects = 20
     def __len__(self):
         return self.total_imgs
     def __getitem__(self,idx):
-        img_path = os.path.join(self.imgdir,self.all_image_ids[idx],'.jpg')
+        img_path = os.path.join(self.imgdir,self.all_image_ids[idx])
         img = np.array(Image.open(img_path)) 
         # Channels-first
         img = np.transpose(img, (2, 0, 1))
         # As pytorch tensor
         img = torch.from_numpy(img).float()
-        return img  
+        # Find boxes in img
+        # Fill matrix
+        labels = np.zeros((self.max_objects, 7)) 
+        if self.num_ships[idx] != 0:
+            box_inds = [i for i,x in enumerate(self.box_image_ids) if x is self.all_image_ids[idx]]
+            for i,ind in enumerate(box_inds[:self.max_objects]):
+                L1 = self.L1[ind]
+                L2 = self.L2[ind]
+                R0 = self.R0[ind]
+                C0 = self.C0[ind]
+                theta = self.theta[ind]
+                # Calculate ratios from coordinates
+                labels[i, 1] = R0 / self.imgsize
+                labels[i, 2] = C0 / self.imgsize
+                labels[i, 3] = L1
+                labels[i, 4] = L2
+                labels[i, 5] = np.sin(theta)
+                labels[i, 6] = np.cos(theta)
+        labels = torch.from_numpy(labels)
+        return img_path, img, labels
+
+
