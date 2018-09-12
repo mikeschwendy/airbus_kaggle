@@ -206,8 +206,8 @@ class SHOLOLayer(nn.Module):
 
     def forward(self, x, targets=None):
         bs = x.size(0)
-        g_dim = x.size(2)
-        stride =  self.img_dim / g_dim
+        g_dim = x.size(2)  # 13, num quadrants
+        stride =  self.img_dim / g_dim # 416/13, num pixels in a quadrant
         # Tensors for cuda support
         FloatTensor = torch.cuda.FloatTensor if x.is_cuda else torch.FloatTensor
         LongTensor = torch.cuda.LongTensor if x.is_cuda else torch.LongTensor
@@ -215,34 +215,37 @@ class SHOLOLayer(nn.Module):
         prediction = x.view(bs,  self.num_anchors, self.bbox_attrs, g_dim, g_dim).permute(0, 1, 3, 4, 2).contiguous()
 
         # Get outputs
-        x = torch.sigmoid(prediction[..., 0])          # Center x
-        y = torch.sigmoid(prediction[..., 1])          # Center y
-        w = prediction[..., 2]                         # Width
-        h = prediction[..., 3]                         # Height
-        sine = -1 + 2*torch.sigmoid(prediction[..., 4])        # Sin of angle
-        cose = -1 + 2*torch.sigmoid(prediction[..., 5])        # Cos of angle
-        conf = torch.sigmoid(prediction[..., 6])       # Conf
+        x = torch.sigmoid(prediction[..., 0])          # Center x, 0<x<1
+        y = torch.sigmoid(prediction[..., 1])          # Center y, 0<y<1
+        w = prediction[..., 2]                         # Width, -inf to inf
+        h = prediction[..., 3]                         # Height, -inf to inf
+        sin = -1 + 2*torch.sigmoid(prediction[..., 4]) # -1 to 1
+        cos = torch.sigmoid(prediction[..., 5])        # 0 to 1 
+        conf = torch.sigmoid(prediction[..., 6])       # Conf, -1 to 1
         pred_cls = torch.sigmoid(prediction[..., 7:])  # Cls pred.
 
-        # Calculate offsets for each grid
-        grid_x = torch.linspace(0, g_dim-1, g_dim).repeat(g_dim,1).repeat(bs*self.num_anchors, 1, 1).view(x.shape).type(FloatTensor)
-        grid_y = torch.linspace(0, g_dim-1, g_dim).repeat(g_dim,1).t().repeat(bs*self.num_anchors, 1, 1).view(y.shape).type(FloatTensor)
-        scaled_anchors = [(a_w / stride, a_h / stride, s, c) for a_w, a_h, s, c in self.anchors]
+        # anchors are originally in pixels
+        # scaled anchors are relative to width of a quadrant
+        scaled_anchors = [(a_w / stride, a_h / stride, a_theta) for a_w, a_h, a_theta in self.anchors]
         anchor_w = FloatTensor(scaled_anchors).index_select(1, LongTensor([0]))
         anchor_h = FloatTensor(scaled_anchors).index_select(1, LongTensor([1]))
-        anchor_s = FloatTensor(scaled_anchors).index_select(1, LongTensor([2]))
-        anchor_c = FloatTensor(scaled_anchors).index_select(1, LongTensor([3]))
+        anchor_theta = FloatTensor(scaled_anchors).index_select(1, LongTensor([2]))
         anchor_w = anchor_w.repeat(bs, 1).repeat(1, 1, g_dim*g_dim).view(w.shape)
         anchor_h = anchor_h.repeat(bs, 1).repeat(1, 1, g_dim*g_dim).view(h.shape)
-        anchor_s = anchor_s.repeat(bs, 1).repeat(1, 1, g_dim*g_dim).view(h.shape)
-        anchor_c = anchor_c.repeat(bs, 1).repeat(1, 1, g_dim*g_dim).view(h.shape)
+        anchor_theta = anchor_theta.repeat(bs, 1).repeat(1, 1, g_dim*g_dim).view(h.shape)
 
+        # Calculate offsets for each grid
+        # 0<x,y<13 
+        grid_x = torch.linspace(0, g_dim-1, g_dim).repeat(g_dim,1).repeat(bs*self.num_anchors, 1, 1).view(x.shape).type(FloatTensor)
+        grid_y = torch.linspace(0, g_dim-1, g_dim).repeat(g_dim,1).t().repeat(bs*self.num_anchors, 1, 1).view(y.shape).type(FloatTensor)
+        
         # Add offset and scale with anchors
         pred_boxes = FloatTensor(prediction[..., :6].shape)
-        pred_boxes[..., 0] = x.data + grid_x
-        pred_boxes[..., 1] = y.data + grid_y
-        pred_boxes[..., 2] = torch.exp(w.data) * anchor_w
-        pred_boxes[..., 3] = torch.exp(h.data) * anchor_h
+        pred_boxes[..., 0] = (x.data + grid_x) * stride   # 0 to 13 * img_dim/13
+        pred_boxes[..., 1] = (y.data + grid_y) * stride   # 0 to 13
+        pred_boxes[..., 2] = (torch.exp(w.data) * anchor_w) * stride  # 1 = one quadrant width
+        pred_boxes[..., 3] = (torch.exp(h.data) * anchor_h) * stride  # 1 = one quadrant height
+        pred_boxes[..., 4] = anchor_theta + torch.atan(sin/cos) 
 
         # Training
         if targets is not None:
@@ -251,10 +254,10 @@ class SHOLOLayer(nn.Module):
                 self.mse_loss = self.mse_loss.cuda()
                 self.bce_loss = self.bce_loss.cuda()
 
-            nGT, nCorrect, mask, conf_mask, tx, ty, tw, th, tconf, tcls = build_targets_oriented(
+            nGT, nCorrect, mask, conf_mask, tx, ty, tw, th, tsin, tcos, tconf, tcls = build_targets_oriented(
                                                                             pred_boxes.cpu().data,
                                                                             targets.cpu().data,
-                                                                            scaled_anchors,
+                                                                            self.anchors,
                                                                             self.num_anchors,
                                                                             self.num_classes,
                                                                             g_dim,
@@ -274,6 +277,8 @@ class SHOLOLayer(nn.Module):
             ty    = Variable(ty.type(FloatTensor), requires_grad=False)
             tw    = Variable(tw.type(FloatTensor), requires_grad=False)
             th    = Variable(th.type(FloatTensor), requires_grad=False)
+            tsin  = Variable(tsin.type(FloatTensor), requires_grad=False)
+            tcos  = Variable(tcos.type(FloatTensor), requires_grad=False)
             tconf = Variable(tconf.type(FloatTensor), requires_grad=False)
             tcls  = Variable(tcls.type(FloatTensor), requires_grad=False)
 
@@ -282,15 +287,17 @@ class SHOLOLayer(nn.Module):
             loss_y = self.lambda_coord * self.bce_loss(y * mask, ty * mask)
             loss_w = self.lambda_coord * self.mse_loss(w * mask, tw * mask) / 2
             loss_h = self.lambda_coord * self.mse_loss(h * mask, th * mask) / 2
+            loss_s = self.lambda_coord * self.mse_loss(sin * mask, tsin * mask) / 2
+            loss_c = self.lambda_coord * self.mse_loss(cos * mask, tcos * mask) / 2
             loss_conf = self.bce_loss(conf * conf_mask, tconf * conf_mask)
             loss_cls = self.bce_loss(pred_cls * cls_mask, tcls * cls_mask)
-            loss = loss_x + loss_y + loss_w + loss_h + loss_conf + loss_cls
+            loss = loss_x + loss_y + loss_w + loss_h + loss_s + loss_c + loss_conf + loss_cls
 
-            return loss, loss_x.item(), loss_y.item(), loss_w.item(), loss_h.item(), loss_conf.item(), loss_cls.item(), recall
+            return loss, loss_x.item(), loss_y.item(), loss_w.item(), loss_h.item(), loss_s.item(), loss_c.item(), loss_conf.item(), loss_cls.item(), recall
 
         else:
             # If not in training phase return predictions
-            output = torch.cat((pred_boxes.view(bs, -1, 4) * stride, conf.view(bs, -1, 1), pred_cls.view(bs, -1, self.num_classes)), -1)
+            output = torch.cat((pred_boxes.view(bs, -1, 5) * stride, conf.view(bs, -1, 1), pred_cls.view(bs, -1, self.num_classes)), -1)
             return output.data
 
 class Darknet(nn.Module):

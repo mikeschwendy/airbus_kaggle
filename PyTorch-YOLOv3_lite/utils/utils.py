@@ -84,6 +84,8 @@ def bbox_iou(box1, box2, x1y1x2y2=True):
 
     return iou
 
+def obox_iou(box1, box2):
+    pass
 
 def non_max_suppression(prediction, num_classes, conf_thres=0.5, nms_thres=0.4):
     """
@@ -148,7 +150,8 @@ def build_targets(pred_boxes, target, anchors, num_anchors, num_classes, dim, ig
     nC = num_classes
     dim = dim
     mask        = torch.zeros(nB, nA, dim, dim)
-    conf_mask   = torch.ones(nB, nA, dim, dim)
+    conf_mask   = torch.zeros(nB, nA, dim, dim, dtype=torch.uint8)
+    ignore_mask = torch.ones(nB, nA, dim, dim, dtype=torch.uint8)
     tx          = torch.zeros(nB, nA, dim, dim)
     ty          = torch.zeros(nB, nA, dim, dim)
     tw          = torch.zeros(nB, nA, dim, dim)
@@ -178,7 +181,7 @@ def build_targets(pred_boxes, target, anchors, num_anchors, num_classes, dim, ig
             # Calculate iou between gt and anchor shapes
             anch_ious = bbox_iou(gt_box, anchor_shapes)
             # Where the overlap is larger than threshold set mask to zero (ignore)
-            conf_mask[b, anch_ious > ignore_thres] = 0
+            ignore_mask[b, anch_ious > ignore_thres, gj, gi] = 0
             # Find the best matching anchor box
             best_n = np.argmax(anch_ious)
             # Get ground truth box
@@ -202,7 +205,7 @@ def build_targets(pred_boxes, target, anchors, num_anchors, num_classes, dim, ig
 
             if iou > 0.5:
                 nCorrect += 1
-
+    conf_mask = (conf_mask | ignore_mask).float()
     return nGT, nCorrect, mask, conf_mask, tx, ty, tw, th, tconf, tcls
 
 def build_targets_oriented(pred_boxes, target, anchors, num_anchors, num_classes, dim, ignore_thres, img_dim):
@@ -211,7 +214,8 @@ def build_targets_oriented(pred_boxes, target, anchors, num_anchors, num_classes
     nC = num_classes
     dim = dim
     mask        = torch.zeros(nB, nA, dim, dim)
-    conf_mask   = torch.ones(nB, nA, dim, dim)
+    conf_mask   = torch.zeros(nB, nA, dim, dim, dtype=torch.uint8)
+    ignore_mask = torch.ones(nB, nA, dim, dim, dtype=torch.uint8)
     tx          = torch.zeros(nB, nA, dim, dim)
     ty          = torch.zeros(nB, nA, dim, dim)
     tw          = torch.zeros(nB, nA, dim, dim)
@@ -228,48 +232,85 @@ def build_targets_oriented(pred_boxes, target, anchors, num_anchors, num_classes
             if target[b, t].sum() == 0:
                 continue
             nGT += 1
+            gx = target[b, t, 1] 
+            gy = target[b, t, 2] 
+            gw = target[b, t, 3] 
+            gh = target[b, t, 4] 
+            gtheta = target[b, t, 5]
             # Convert to position relative to box
-            gx = target[b, t, 1] * dim
-            gy = target[b, t, 2] * dim
-            gw = target[b, t, 3] * dim
-            gh = target[b, t, 4] * dim
+            gx_scaled = gx * dim/img_dim
+            gy_scaled = gy * dim/img_dim
+            gw_scaled = gw * dim/img_dim
+            gh_scaled = gh * dim/img_dim
             # Get grid box indices
-            gi = int(gx)
-            gj = int(gy)
+            gi = int(gx_scaled)
+            gj = int(gy_scaled)
             # Get shape of gt box
-            gt_box = torch.FloatTensor(np.array([0, 0, gw, gh])).unsqueeze(0)
+            gt_box = torch.FloatTensor(np.array([img_dim/2, img_dim/2, gw, gh, gtheta])).unsqueeze(0)
             # Get shape of anchor box
-            anchor_shapes = torch.FloatTensor(np.concatenate((np.zeros((len(anchors), 2)), np.array(anchors)), 1))
+            anchor_shapes = torch.FloatTensor(np.concatenate((img_dim/2*np.ones((len(anchors), 2)), np.array(anchors)), 1))
             # Calculate iou between gt and anchor shapes
-            anch_ious = bbox_iou(gt_box, anchor_shapes)
+            anch_ious = obox_iou(gt_box, anchor_shapes)
             # Where the overlap is larger than threshold set mask to zero (ignore)
-            conf_mask[b, anch_ious > ignore_thres] = 0
+            ignore_mask[b, anch_ious > ignore_thres, gj, gi] = 0
             # Find the best matching anchor box
             best_n = np.argmax(anch_ious)
             # Get ground truth box
-            gt_box = torch.FloatTensor(np.array([gx, gy, gw, gh])).unsqueeze(0)
+            gt_box = torch.FloatTensor(np.array([gx, gy, gw, gh, gtheta])).unsqueeze(0)
             # Get the best prediction
             pred_box = pred_boxes[b, best_n, gj, gi].unsqueeze(0)
             # Masks
             mask[b, best_n, gj, gi] = 1
             conf_mask[b, best_n, gj, gi] = 1
             # Coordinates
-            tx[b, best_n, gj, gi] = gx - gi
-            ty[b, best_n, gj, gi] = gy - gj
+            tx[b, best_n, gj, gi] = gx_scaled - gi
+            ty[b, best_n, gj, gi] = gy_scaled - gj
             # Width and height
             tw[b, best_n, gj, gi] = math.log(gw/anchors[best_n][0] + 1e-16)
             th[b, best_n, gj, gi] = math.log(gh/anchors[best_n][1] + 1e-16)
+            # Sin and Cos
+            delta_theta = gtheta - anchors[best_n][2]
+            if delta_theta < -math.pi/2:
+                delta_theta += math.pi
+            elif delta_theta > math.pi/2:
+                delta_theta += -math.pi
+            ts[b, best_n, gj, gi] = math.asin(delta_theta)
+            tc[b, best_n, gj, gi] = math.acos(delta_theta)
             # One-hot encoding of label
             tcls[b, best_n, gj, gi, int(target[b, t, 0])] = 1
             # Calculate iou between ground truth and best matching prediction
-            iou = bbox_iou(gt_box, pred_box, x1y1x2y2=False)
+            iou = obox_iou(gt_box, pred_box)
             tconf[b, best_n, gj, gi] = 1
 
             if iou > 0.5:
                 nCorrect += 1
+    conf_mask = (conf_mask | ignore_mask).float()
+    return nGT, nCorrect, mask, conf_mask, tx, ty, tw, th, ts, tc, tconf, tcls
 
-    return nGT, nCorrect, mask, conf_mask, tx, ty, tw, th, tconf, tcls
+def box2mask(box,mask_size=(768,768)):
+    R0 = box[0]
+    C0 = box[1]
+    L1 = box[2]
+    L2 = box[3]
+    theta = box[4]
+    R = np.array([[np.cos(theta),-np.sin(theta)],[np.sin(theta),np.cos(theta)]])
+    box = 0.5*np.array([[L1,L2],[L1,-L2],[-L1,-L2],[-L1,L2]]).T
+    box_rot = np.dot(R,box)
+    rr, cc = draw.polygon(R0+box_rot[0,:],C0+box_rot[1,:],shape=mask_size)
+    mask = np.zeros(mask_size,dtype=int)
+    mask[rr,cc] = 1
+    return mask
 
+def mask_iou(mask1,mask2):
+    intersection = mask1 & mask2
+    union = mask1 | mask2
+    iou = np.sum(intersection) / np.sum(union)
+    return iou
+
+def obox_iou(box1,box2,imsize=(768,768)):
+    mask_1 = box2mask(gt_box_1)
+    mask_2 = box2mask(gt_box_2)
+    return mask_iou(mask_1,mask_2)
 
 def to_categorical(y, num_classes):
     """ 1-hot encodes a tensor """

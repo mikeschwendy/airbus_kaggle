@@ -242,13 +242,12 @@ class BoxDetections(Dataset):
                 C0 = self.C0[ind]
                 theta = self.theta[ind]
                 # Calculate ratios from coordinates
-                labels[i, 1] = R0 / self.imgsize
-                labels[i, 2] = C0 / self.imgsize
-                labels[i, 3] = L1
+                labels[i, 1] = R0 
+                labels[i, 2] = C0 
+                labels[i, 3] = L1 
                 labels[i, 4] = L2
-                labels[i, 5] = np.sin(theta)
-                labels[i, 6] = np.cos(theta)
+                labels[i, 5] = theta
         labels = torch.from_numpy(labels)
         return img_path, img, labels
-
+    
 
