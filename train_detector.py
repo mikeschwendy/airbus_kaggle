@@ -14,7 +14,7 @@ from torchvision.utils import make_grid, save_image
 from torch.autograd import Variable
 import torch.optim as optim
 import numpy as np
-from pdb import set_trace as bp
+from pdb import set_trace
 sys.path.append('./PyTorch-YOLOv3_lite')
 
 from matplotlib import pyplot as plt
@@ -24,14 +24,32 @@ from utils.utils import *
 from utils.datasets import *
 from utils.parse_config import *
 
-args = ['--image_folder','/airbus/train',
-        '--box_file','/airbus/box_data.pickle',
-        '--model_config_path','./PyTorch-YOLOv3_lite/config/sholo.cfg',
-        '--checkpoint_dir','/output',
-        '--img_size','768',
-        '--epochs','2',
-        '--n_cpu','4',
-        '--use_cuda','True']
+host = "floyd"
+if host is "local":
+    args = ['--image_folder','../data_small/train',
+            '--box_file','../data_small/box_data.pickle',
+            '--model_config_path','./PyTorch-YOLOv3_lite/config/sholo.cfg',
+            '--checkpoint_dir','../data_small/output',
+            '--weights_path','../classifier_weights/6.weights',
+            '--img_size','768',
+            '--epochs','2',
+            '--n_cpu','4',
+            '--batch_size','2',
+            '--use_cuda','True']
+elif host is "floyd":       
+    args = ['--image_folder','/airbus/train',
+            '--box_file','/airbus/box_data.pickle',
+            '--model_config_path','./PyTorch-YOLOv3_lite/config/sholo.cfg',
+            '--checkpoint_dir','/output',
+            '--weights_path','/weights/6.weights',
+            '--img_size','768',
+            '--epochs','100',
+            '--n_cpu','4',
+            '--batch_size','5',
+            '--use_cuda','True']
+else:
+    raise NameError("invalid host name")
+
 parser = argparse.ArgumentParser()
 parser.add_argument('--epochs', type=int, default=30, help='number of epochs')
 parser.add_argument('--image_folder', type=str, default='data/samples', help='path to dataset')
@@ -59,8 +77,8 @@ decay           = float(hyperparams['decay'])
 burn_in         = int(hyperparams['burn_in'])
 
 # Initiate model
-model = Darknet(opt.model_config_path)
-#model.load_weights(opt.weights_path)
+model = Darknet_Sholo(opt.model_config_path)
+model.load_classifier_weights(opt.weights_path)
 model.apply(weights_init_normal)
 
 if cuda:
@@ -79,13 +97,12 @@ dataloader = torch.utils.data.DataLoader(dataset, batch_size=opt.batch_size, shu
 Tensor = torch.cuda.FloatTensor if cuda else torch.FloatTensor
 
 optimizer = optim.SGD(model.parameters(), lr=learning_rate, momentum=momentum, dampening=0, weight_decay=decay)
-
+running_recall = np.zeros(100)
 for epoch in range(opt.epochs):
     loss_list = []
-    for batch_i, (_, imgs, targets)) in enumerate(dataloader):
+    for batch_i, (img_file, imgs, targets) in enumerate(dataloader):
         imgs = Variable(imgs.type(Tensor))
         targets = Variable(targets.type(Tensor), requires_grad=False)
-
         optimizer.zero_grad()
 
         loss = model(imgs, targets)
@@ -93,17 +110,29 @@ for epoch in range(opt.epochs):
         loss.backward()
         optimizer.step()
         loss_list.append(loss.item())
+        running_recall[:-1] = running_recall[1:]
+        running_recall[-1] = model.losses['recall']
+        #print('[Epoch %d/%d, Batch %d/%d] [Losses: x %f, y %f, w %f, h %f, sin %f, cos %f, conf %f, cls %f, total %f, recall: %.5f]' %
+        #                            (epoch, opt.epochs, batch_i, len(dataloader),
+        #                            model.losses['x'], model.losses['y'], model.losses['w'],
+        #                            model.losses['h'], model.losses['sin'],model.losses['cos'],model.losses['conf'], model.losses['cls'],
+        #                           loss.item(), model.losses['recall']))
 
-        print('[Epoch %d/%d, Batch %d/%d] [Losses: x %f, y %f, w %f, h %f, conf %f, cls %f, total %f, recall: %.5f]' %
-                                    (epoch, opt.epochs, batch_i, len(dataloader),
-                                    model.losses['x'], model.losses['y'], model.losses['w'],
-                                    model.losses['h'], model.losses['conf'], model.losses['cls'],
-                                    loss.item(), model.losses['recall']))
+        print('{{"metric": "epoch", "value": {}}}'.format(epoch))
+        print('{{"metric": "batch", "value": {}}}'.format(batch_i))
+        print('{{"metric": "loss", "value": {}}}'.format(loss.item()))
+        print('{{"metric": "log_loss", "value": {}}}'.format(np.log10(loss.item())))
+        print('{{"metric": "loss_x", "value": {}}}'.format(model.losses['x']))
+        print('{{"metric": "loss_y", "value": {}}}'.format(model.losses['y']))
+        print('{{"metric": "loss_w", "value": {}}}'.format(model.losses['w']))
+        print('{{"metric": "loss_h", "value": {}}}'.format(model.losses['h']))
+        print('{{"metric": "loss_sin", "value": {}}}'.format(model.losses['sin']))
+        print('{{"metric": "loss_cos", "value": {}}}'.format(model.losses['cos']))
+        print('{{"metric": "loss_conf", "value": {}}}'.format(model.losses['conf']))
+        print('{{"metric": "loss_class", "value": {}}}'.format(model.losses['cls']))
+        print('{{"metric": "recall (running mean)", "value": {}}}'.format(np.mean(running_recall)))
 
         model.seen += imgs.size(0)
-        
-        if batch_i > 5:
-            break
 
     if epoch % opt.checkpoint_interval == 0:
         model.save_weights('%s/%d.weights' % (opt.checkpoint_dir, epoch))

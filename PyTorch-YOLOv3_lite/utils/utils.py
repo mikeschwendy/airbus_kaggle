@@ -6,9 +6,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
 import numpy as np
-
+import pdb
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
+from skimage import draw
+
 
 def load_classes(path):
     """
@@ -83,9 +85,6 @@ def bbox_iou(box1, box2, x1y1x2y2=True):
     iou = inter_area / (b1_area + b2_area - inter_area + 1e-16)
 
     return iou
-
-def obox_iou(box1, box2):
-    pass
 
 def non_max_suppression(prediction, num_classes, conf_thres=0.5, nms_thres=0.4):
     """
@@ -274,8 +273,8 @@ def build_targets_oriented(pred_boxes, target, anchors, num_anchors, num_classes
                 delta_theta += math.pi
             elif delta_theta > math.pi/2:
                 delta_theta += -math.pi
-            ts[b, best_n, gj, gi] = math.asin(delta_theta)
-            tc[b, best_n, gj, gi] = math.acos(delta_theta)
+            ts[b, best_n, gj, gi] = math.sin(delta_theta)
+            tc[b, best_n, gj, gi] = math.cos(delta_theta)
             # One-hot encoding of label
             tcls[b, best_n, gj, gi, int(target[b, t, 0])] = 1
             # Calculate iou between ground truth and best matching prediction
@@ -288,11 +287,11 @@ def build_targets_oriented(pred_boxes, target, anchors, num_anchors, num_classes
     return nGT, nCorrect, mask, conf_mask, tx, ty, tw, th, ts, tc, tconf, tcls
 
 def box2mask(box,mask_size=(768,768)):
-    R0 = box[0]
-    C0 = box[1]
-    L1 = box[2]
-    L2 = box[3]
-    theta = box[4]
+    R0 = box[0].numpy()
+    C0 = box[1].numpy()
+    L1 = box[2].numpy()
+    L2 = box[3].numpy()
+    theta = box[4].numpy()
     R = np.array([[np.cos(theta),-np.sin(theta)],[np.sin(theta),np.cos(theta)]])
     box = 0.5*np.array([[L1,L2],[L1,-L2],[-L1,-L2],[-L1,L2]]).T
     box_rot = np.dot(R,box)
@@ -304,13 +303,16 @@ def box2mask(box,mask_size=(768,768)):
 def mask_iou(mask1,mask2):
     intersection = mask1 & mask2
     union = mask1 | mask2
-    iou = np.sum(intersection) / np.sum(union)
+    iou = np.sum(intersection) / (np.sum(union)+1e-16)
     return iou
 
 def obox_iou(box1,box2,imsize=(768,768)):
-    mask_1 = box2mask(gt_box_1)
-    mask_2 = box2mask(gt_box_2)
-    return mask_iou(mask_1,mask_2)
+    mask_1 = box2mask(box1[0])
+    ious = []
+    for b in box2:
+        mask_2 = box2mask(b)
+        ious.append(mask_iou(mask_1,mask_2))
+    return torch.FloatTensor(ious)
 
 def to_categorical(y, num_classes):
     """ 1-hot encodes a tensor """
