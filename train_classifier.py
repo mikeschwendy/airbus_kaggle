@@ -24,14 +24,30 @@ from utils.utils import *
 from utils.datasets import *
 from utils.parse_config import *
 
-args = ['--image_folder','/airbus/train',
-        '--box_file','/airbus/box_data.pickle',
-        '--model_config_path','./PyTorch-YOLOv3_lite/config/classifier.cfg',
-        '--checkpoint_dir','/output',
-        '--img_size','64',
-        '--epochs','30',
-        '--n_cpu','4',
-        '--use_cuda','True']
+host = "local"
+if host is "local":
+    args = ['--image_folder','../data_small/train',
+            '--box_file','../data_small/box_data.pickle',
+            '--model_config_path','./PyTorch-YOLOv3_lite/config/classifier.cfg',
+            '--weights_path','../classifier_weights/6.weights',
+            '--img_size','768',
+            '--epochs','2',
+            '--n_cpu','4',
+            '--batch_size','2',
+            '--use_cuda','True']
+elif host is "floyd":       
+    args = ['--image_folder','/airbus/train',
+            '--box_file','/airbus/box_data.pickle',
+            '--model_config_path','./PyTorch-YOLOv3_lite/config/sholo.cfg',
+            '--weights_path','/weights/6.weights',
+            '--img_size','768',
+            '--epochs','100',
+            '--n_cpu','4',
+            '--batch_size','5',
+            '--use_cuda','True']
+else:
+    raise NameError("invalid host name")
+
 parser = argparse.ArgumentParser()
 parser.add_argument('--epochs', type=int, default=30, help='number of epochs')
 parser.add_argument('--image_folder', type=str, default='data/samples', help='path to dataset')
@@ -98,7 +114,7 @@ for epoch in range(opt.epochs):
                                     (epoch, opt.epochs-1, batch_i, len(dataloader),loss.item()))
 
         model.seen += imgs.size(0)
-        
+        pdb.set_trace()
         if batch_i > 1000:
             break
 

@@ -232,7 +232,7 @@ class BoxDetections(Dataset):
         img = torch.from_numpy(img).float()
         # Find boxes in img
         # Fill matrix
-        labels = np.zeros((self.max_objects, 7)) 
+        labels = np.zeros((self.max_objects, 6)) 
         if self.num_ships[idx] != 0:
             box_inds = [i for i,x in enumerate(self.box_image_ids) if x is self.all_image_ids[idx]]
             for i,ind in enumerate(box_inds[:self.max_objects]):
@@ -242,8 +242,8 @@ class BoxDetections(Dataset):
                 C0 = self.C0[ind]
                 theta = self.theta[ind]
                 # Calculate ratios from coordinates
-                labels[i, 1] = R0 
-                labels[i, 2] = C0 
+                labels[i, 1] = C0 
+                labels[i, 2] = R0 
                 labels[i, 3] = L1 
                 labels[i, 4] = L2
                 labels[i, 5] = theta

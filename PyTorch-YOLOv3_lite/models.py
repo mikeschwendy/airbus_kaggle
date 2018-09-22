@@ -210,7 +210,7 @@ class SHOLOLayer(nn.Module):
         self.bbox_attrs = 7 + num_classes
         self.img_dim = img_dim
         self.ignore_thres = 0.5
-        self.lambda_coord = 100
+        self.lambda_coord = 50
 
         self.mse_loss = nn.MSELoss()
         self.bce_loss = nn.BCELoss()
@@ -223,14 +223,14 @@ class SHOLOLayer(nn.Module):
         FloatTensor = torch.cuda.FloatTensor if x.is_cuda else torch.FloatTensor
         LongTensor = torch.cuda.LongTensor if x.is_cuda else torch.LongTensor
         prediction = x.view(bs,  self.num_anchors, self.bbox_attrs, g_dim, g_dim).permute(0, 1, 3, 4, 2).contiguous()
-
+        sqrt2 = torch.sqrt(FloatTensor([2]))     
         # Get outputs
         x = torch.sigmoid(prediction[..., 0])          # Center x, 0<x<1
         y = torch.sigmoid(prediction[..., 1])          # Center y, 0<y<1
         w = prediction[..., 2]                         # Width, -inf to inf
         h = prediction[..., 3]                         # Height, -inf to inf
-        sin = -1 + 2*torch.sigmoid(prediction[..., 4]) # -1 to 1
-        cos = torch.sigmoid(prediction[..., 5])        # 0 to 1 
+        sin = -0.5*sqrt2 + sqrt2*torch.sigmoid(prediction[..., 4]) # -1 to 1
+        cos = 0.5*sqrt2+ (1-0.5*sqrt2)*torch.sigmoid(prediction[..., 5])        # 0 to 1 
         conf = torch.sigmoid(prediction[..., 6])       # Conf, -1 to 1
         pred_cls = torch.sigmoid(prediction[..., 7:])  # Cls pred.
 
@@ -250,20 +250,20 @@ class SHOLOLayer(nn.Module):
         grid_y = torch.linspace(0, g_dim-1, g_dim).repeat(g_dim,1).t().repeat(bs*self.num_anchors, 1, 1).view(y.shape).type(FloatTensor)
         
         # Add offset and scale with anchors
-        pred_boxes = FloatTensor(prediction[..., :6].shape)
-        pred_boxes[..., 0] = (x.data + grid_x) * stride   # 0 to 13 * img_dim/13
-        pred_boxes[..., 1] = (y.data + grid_y) * stride   # 0 to 13
-        pred_boxes[..., 2] = (torch.exp(w.data) * anchor_w) * stride  # 1 = one quadrant width
-        pred_boxes[..., 3] = (torch.exp(h.data) * anchor_h) * stride  # 1 = one quadrant height
+        pred_boxes = FloatTensor(prediction[..., :5].shape)
+        pred_boxes[..., 0] = (x.data + grid_x) * stride   
+        pred_boxes[..., 1] = (y.data + grid_y) * stride   
+        pred_boxes[..., 2] = (torch.exp(w.data) * anchor_w) * stride  
+        pred_boxes[..., 3] = (torch.exp(h.data) * anchor_h) * stride  
         pred_boxes[..., 4] = anchor_theta + torch.atan(sin/cos) 
-
+        #pdb.set_trace()
         # Training
         if targets is not None:
 
             if x.is_cuda:
                 self.mse_loss = self.mse_loss.cuda()
                 self.bce_loss = self.bce_loss.cuda()
-
+            #pdb.set_trace()
             nGT, nCorrect, mask, conf_mask, tx, ty, tw, th, tsin, tcos, tconf, tcls = build_targets_oriented(
                                                                             pred_boxes.cpu().data,
                                                                             targets.cpu().data,
@@ -297,8 +297,8 @@ class SHOLOLayer(nn.Module):
             loss_y = self.lambda_coord * self.bce_loss(y * mask, ty * mask)
             loss_w = self.lambda_coord * self.mse_loss(w * mask, tw * mask) / 2
             loss_h = self.lambda_coord * self.mse_loss(h * mask, th * mask) / 2
-            loss_s = self.lambda_coord * self.mse_loss(sin * mask, tsin * mask) / 2
-            loss_c = self.lambda_coord * self.mse_loss(cos * mask, tcos * mask) / 2
+            loss_s = self.lambda_coord * self.bce_loss(0.5*(sin+1) * mask, 0.5*(tsin+1) * mask) 
+            loss_c = self.lambda_coord * self.bce_loss(cos * mask, tcos * mask) 
             loss_conf = self.bce_loss(conf * conf_mask, tconf * conf_mask)
             loss_cls = self.bce_loss(pred_cls * cls_mask, tcls * cls_mask)
             loss = loss_x + loss_y + loss_w + loss_h + loss_s + loss_c + loss_conf + loss_cls
@@ -306,7 +306,8 @@ class SHOLOLayer(nn.Module):
 
         else:
             # If not in training phase return predictions
-            output = torch.cat((pred_boxes.view(bs, -1, 5) * stride, conf.view(bs, -1, 1), pred_cls.view(bs, -1, self.num_classes)), -1)
+            #pdb.set_trace()
+            output = torch.cat((pred_boxes.view(bs, -1, 5), conf.view(bs, -1, 1), pred_cls.view(bs, -1, self.num_classes)), -1)
             return output.data
 
 class Darknet_Sholo(nn.Module):
@@ -317,7 +318,7 @@ class Darknet_Sholo(nn.Module):
         self.hyperparams, self.module_list = create_modules(self.module_defs)
         self.img_size = img_size
         self.seen = 0
-        self.header_info = np.array([0, 0, 0, self.seen, 0])
+        self.header_info = np.array([0, 0, 0, self.seen, 0],dtype=np.int32)
         self.loss_names = ['x', 'y', 'w', 'h','sin','cos','conf', 'cls', 'recall']
 
     def forward(self, x, targets=None):
@@ -356,15 +357,15 @@ class Darknet_Sholo(nn.Module):
                 output.append(x)                
             layer_outputs.append(x)
 
-        self.losses['recall'] /= 3
+        #self.losses['recall'] /= 3
         return sum(output) if is_training else torch.cat(output, 1)
 
-    def load_classifier_weights(self, weights_path):
+    def load_classifier_weights(self, weights_path, header_dtype=np.int32):
         """Parses and loads the weights from a Darknet_Classifier stored in 'weights_path'"""
 
         #Open the weights file
         fp = open(weights_path, "rb")
-        header = np.fromfile(fp, dtype=np.int32, count=5)   # First five are header values
+        header = np.fromfile(fp, dtype=header_dtype, count=5)   # First five are header values
 
         # Needed to write header when saving weights
         self.header_info = header
@@ -372,7 +373,8 @@ class Darknet_Sholo(nn.Module):
         self.seen = header[3]
         weights = np.fromfile(fp, dtype=np.float32)         # The rest are weights
         fp.close()
-        ptr = 5
+        ptr = 0
+        #pdb.set_trace()
         for i, (module_def, module) in enumerate(zip(self.module_defs, self.module_list)):
             if i > 74:
                 break
@@ -409,7 +411,6 @@ class Darknet_Sholo(nn.Module):
                 conv_w = torch.from_numpy(weights[ptr:ptr + num_w]).view_as(conv_layer.weight)
                 conv_layer.weight.data.copy_(conv_w)
                 ptr += num_w
-        #pdb.set_trace()
 
     def load_weights(self, weights_path):
         """Parses and loads the weights stored in 'weights_path'"""
@@ -417,15 +418,15 @@ class Darknet_Sholo(nn.Module):
         #Open the weights file
         fp = open(weights_path, "rb")
         header = np.fromfile(fp, dtype=np.int32, count=5)   # First five are header values
-
+        print(header)
         # Needed to write header when saving weights
         self.header_info = header
 
         self.seen = header[3]
         weights = np.fromfile(fp, dtype=np.float32)         # The rest are weights
         fp.close()
-
-        ptr = 5
+        #pdb.set_trace()
+        ptr = 0
         for i, (module_def, module) in enumerate(zip(self.module_defs, self.module_list)):
             if module_def['type'] == 'convolutional':
                 conv_layer = module[0]
@@ -469,7 +470,7 @@ class Darknet_Sholo(nn.Module):
 
         fp = open(path, 'wb')
         self.header_info[3] = self.seen
-        self.header_info.tofile(fp)
+        self.header_info.astype(np.int32).tofile(fp)
 
         # Iterate through layers
         for i, (module_def, module) in enumerate(zip(self.module_defs[:cutoff], self.module_list[:cutoff])):
@@ -522,7 +523,6 @@ class Darknet_Classifier(nn.Module):
             elif module_def['type'] == 'classify':
                 # Train phase: get loss
                 if is_training:
-                    #pdb.set_trace()
                     x = x.squeeze()
                     loss = nn.functional.binary_cross_entropy_with_logits(x, targets)                    
             layer_outputs.append(x)
@@ -534,8 +534,7 @@ class Darknet_Classifier(nn.Module):
 
         #Open the weights file
         fp = open(weights_path, "rb")
-        header = np.fromfile(fp, dtype=np.int32, count=5)   # First five are header values
-
+        header = np.fromfile(fp, dtype=np.int64, count=5)   # First five are header values
         # Needed to write header when saving weights
         self.header_info = header
 
@@ -543,7 +542,7 @@ class Darknet_Classifier(nn.Module):
         weights = np.fromfile(fp, dtype=np.float32)         # The rest are weights
         fp.close()
 
-        ptr = 5
+        ptr = 0
         for i, (module_def, module) in enumerate(zip(self.module_defs, self.module_list)):
             if module_def['type'] == 'convolutional':
                 conv_layer = module[0]

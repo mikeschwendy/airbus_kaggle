@@ -13,6 +13,7 @@ from torchvision import transforms
 from torchvision.utils import make_grid, save_image
 from torch.autograd import Variable
 import torch.optim as optim
+import torch.backends.cudnn as cudnn
 import numpy as np
 from pdb import set_trace
 sys.path.append('./PyTorch-YOLOv3_lite')
@@ -26,27 +27,28 @@ from utils.parse_config import *
 
 host = "floyd"
 if host is "local":
-    args = ['--image_folder','../data_small/train',
-            '--box_file','../data_small/box_data.pickle',
-            '--model_config_path','./PyTorch-YOLOv3_lite/config/sholo.cfg',
-            '--checkpoint_dir','../data_small/output',
-            '--weights_path','../classifier_weights/6.weights',
+    args = ['--image_folder','../data_tiny/train',
+            '--box_file','../data_tiny/box_data.pickle',
+            '--model_config_path','./PyTorch-YOLOv3_lite/config/sholo_v1.cfg',
+            '--checkpoint_dir','../detector_weights',
+            '--weights_path','../detector_weights/yolov3_initialized.weights',
             '--img_size','768',
             '--epochs','2',
             '--n_cpu','4',
-            '--batch_size','2',
+            '--batch_size','1',
             '--use_cuda','True']
 elif host is "floyd":       
     args = ['--image_folder','/airbus/train',
             '--box_file','/airbus/box_data.pickle',
-            '--model_config_path','./PyTorch-YOLOv3_lite/config/sholo.cfg',
+            '--model_config_path','./PyTorch-YOLOv3_lite/config/sholo_v1.cfg',
             '--checkpoint_dir','/output',
-            '--weights_path','/weights/6.weights',
+            '--weights_path','/weights/yolov3_initialized.weights',
             '--img_size','768',
             '--epochs','100',
             '--n_cpu','4',
-            '--batch_size','5',
-            '--use_cuda','True']
+            '--batch_size','6',
+            '--use_cuda','True',
+            '--checkpoint_interval','1']
 else:
     raise NameError("invalid host name")
 
@@ -74,16 +76,17 @@ hyperparams     = parse_model_config(opt.model_config_path)[0]
 learning_rate   = float(hyperparams['learning_rate'])
 momentum        = float(hyperparams['momentum'])
 decay           = float(hyperparams['decay'])
-burn_in         = int(hyperparams['burn_in'])
+#burn_in         = int(hyperparams['burn_in'])
 
 # Initiate model
 model = Darknet_Sholo(opt.model_config_path)
-model.load_classifier_weights(opt.weights_path)
 model.apply(weights_init_normal)
-
+#model.load_classifier_weights(opt.weights_path, header_dtype=np.int32)
+#model.save_weights('%s/yolov3_initialized.weights' % (opt.checkpoint_dir))
+model.load_weights(opt.weights_path)
 if cuda:
     model = model.cuda()
-
+    cudnn.benchmark=True
 model.train()
 
 # Get dataloader
@@ -97,9 +100,20 @@ dataloader = torch.utils.data.DataLoader(dataset, batch_size=opt.batch_size, shu
 Tensor = torch.cuda.FloatTensor if cuda else torch.FloatTensor
 
 optimizer = optim.SGD(model.parameters(), lr=learning_rate, momentum=momentum, dampening=0, weight_decay=decay)
-running_recall = np.zeros(100)
+
+running_recall = np.empty(100); running_recall[:] = np.nan
+running_loss = np.empty(100); running_loss[:] = np.nan
+running_loss_x = np.empty(100); running_loss_x[:] = np.nan
+running_loss_y = np.empty(100); running_loss_y[:] = np.nan
+running_loss_w = np.empty(100); running_loss_w[:] = np.nan
+running_loss_h = np.empty(100); running_loss_h[:] = np.nan
+running_loss_sin = np.empty(100); running_loss_sin[:] = np.nan
+running_loss_cos = np.empty(100); running_loss_cos[:] = np.nan
+running_loss_conf = np.empty(100); running_loss_conf[:] = np.nan
+running_loss_cls = np.empty(100); running_loss_cls[:] = np.nan
+
 for epoch in range(opt.epochs):
-    loss_list = []
+    #loss_list = []
     for batch_i, (img_file, imgs, targets) in enumerate(dataloader):
         imgs = Variable(imgs.type(Tensor))
         targets = Variable(targets.type(Tensor), requires_grad=False)
@@ -109,9 +123,17 @@ for epoch in range(opt.epochs):
 
         loss.backward()
         optimizer.step()
-        loss_list.append(loss.item())
-        running_recall[:-1] = running_recall[1:]
-        running_recall[-1] = model.losses['recall']
+        #loss_list.append(loss.item())
+        running_recall[:-1] = running_recall[1:]; running_recall[-1] = model.losses['recall']
+        running_loss[:-1] = running_loss[1:]; running_loss[-1] = loss.item()
+        running_loss_x[:-1] = running_loss_x[1:]; running_loss_x[-1] = model.losses['x']
+        running_loss_y[:-1] = running_loss_y[1:]; running_loss_y[-1] = model.losses['y']
+        running_loss_w[:-1] = running_loss_w[1:]; running_loss_w[-1] = model.losses['w']
+        running_loss_h[:-1] = running_loss_h[1:]; running_loss_h[-1] = model.losses['h']
+        running_loss_sin[:-1] = running_loss_sin[1:]; running_loss_sin[-1] = model.losses['sin']
+        running_loss_cos[:-1] = running_loss_cos[1:]; running_loss_cos[-1] = model.losses['cos']
+        running_loss_conf[:-1] = running_loss_conf[1:]; running_loss_conf[-1] = model.losses['conf']
+        running_loss_cls[:-1] = running_loss_cls[1:]; running_loss_cls[-1] = model.losses['cls']
         #print('[Epoch %d/%d, Batch %d/%d] [Losses: x %f, y %f, w %f, h %f, sin %f, cos %f, conf %f, cls %f, total %f, recall: %.5f]' %
         #                            (epoch, opt.epochs, batch_i, len(dataloader),
         #                            model.losses['x'], model.losses['y'], model.losses['w'],
@@ -120,22 +142,23 @@ for epoch in range(opt.epochs):
 
         print('{{"metric": "epoch", "value": {}}}'.format(epoch))
         print('{{"metric": "batch", "value": {}}}'.format(batch_i))
-        print('{{"metric": "loss", "value": {}}}'.format(loss.item()))
-        print('{{"metric": "log_loss", "value": {}}}'.format(np.log10(loss.item())))
-        print('{{"metric": "loss_x", "value": {}}}'.format(model.losses['x']))
-        print('{{"metric": "loss_y", "value": {}}}'.format(model.losses['y']))
-        print('{{"metric": "loss_w", "value": {}}}'.format(model.losses['w']))
-        print('{{"metric": "loss_h", "value": {}}}'.format(model.losses['h']))
-        print('{{"metric": "loss_sin", "value": {}}}'.format(model.losses['sin']))
-        print('{{"metric": "loss_cos", "value": {}}}'.format(model.losses['cos']))
-        print('{{"metric": "loss_conf", "value": {}}}'.format(model.losses['conf']))
-        print('{{"metric": "loss_class", "value": {}}}'.format(model.losses['cls']))
-        print('{{"metric": "recall (running mean)", "value": {}}}'.format(np.mean(running_recall)))
+        print('{{"metric": "loss", "value": {}}}'.format(np.nanmean(running_loss)))
+        print('{{"metric": "log_loss", "value": {}}}'.format(np.log10(np.nanmean(running_loss))))
+        print('{{"metric": "loss_x", "value": {}}}'.format(np.nanmean(running_loss_x)))
+        print('{{"metric": "loss_y", "value": {}}}'.format(np.nanmean(running_loss_y)))
+        print('{{"metric": "loss_w", "value": {}}}'.format(np.log10(np.nanmean(running_loss_w))))
+        print('{{"metric": "loss_h", "value": {}}}'.format(np.log10(np.nanmean(running_loss_h))))
+        print('{{"metric": "loss_sin", "value": {}}}'.format(np.nanmean(running_loss_sin)))
+        print('{{"metric": "loss_cos", "value": {}}}'.format(np.nanmean(running_loss_cos)))
+        print('{{"metric": "loss_conf", "value": {}}}'.format(np.log10(np.nanmean(running_loss_conf))))
+        print('{{"metric": "loss_class", "value": {}}}'.format(np.nanmean(running_loss_cls)))
+        print('{{"metric": "recall ", "value": {}}}'.format(np.nanmean(running_recall)))
 
         model.seen += imgs.size(0)
-
+        if batch_i == 1000:
+            break
     if epoch % opt.checkpoint_interval == 0:
         model.save_weights('%s/%d.weights' % (opt.checkpoint_dir, epoch))
-        with open('{}/loss.csv'.format(opt.checkpoint_dir), 'a', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow((epoch,np.mean(np.array(loss_list))))
+        #with open('{}/loss.csv'.format(opt.checkpoint_dir), 'a', newline='') as f:
+        #    writer = csv.writer(f)
+        #    writer.writerow((epoch,np.mean(np.array(loss_list))))
