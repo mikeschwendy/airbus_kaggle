@@ -210,7 +210,7 @@ class SHOLOLayer(nn.Module):
         self.bbox_attrs = 7 + num_classes
         self.img_dim = img_dim
         self.ignore_thres = 0.5
-        self.lambda_coord = 50
+        self.lambda_coord = 5
 
         self.mse_loss = nn.MSELoss()
         self.bce_loss = nn.BCELoss()
@@ -229,20 +229,22 @@ class SHOLOLayer(nn.Module):
         y = torch.sigmoid(prediction[..., 1])          # Center y, 0<y<1
         w = prediction[..., 2]                         # Width, -inf to inf
         h = prediction[..., 3]                         # Height, -inf to inf
-        sin = -0.5*sqrt2 + sqrt2*torch.sigmoid(prediction[..., 4]) # -1 to 1
-        cos = 0.5*sqrt2+ (1-0.5*sqrt2)*torch.sigmoid(prediction[..., 5])        # 0 to 1 
-        conf = torch.sigmoid(prediction[..., 6])       # Conf, -1 to 1
-        pred_cls = torch.sigmoid(prediction[..., 7:])  # Cls pred.
-
+        #sin = -0.5*sqrt2 + sqrt2*torch.sigmoid(prediction[..., 4]) # -1 to 1
+        #cos = 0.5*sqrt2+ (1-0.5*sqrt2)*torch.sigmoid(prediction[..., 5])        # 0 to 1 
+        #conf = torch.sigmoid(prediction[..., 6])       # Conf, -1 to 1
+        #pred_cls = torch.sigmoid(prediction[..., 7:])  # Cls pred.
+        conf = torch.sigmoid(prediction[..., 4])       # Conf, -1 to 1
+        pred_cls = torch.sigmoid(prediction[..., 5:])  # Cls pred.
+        
         # anchors are originally in pixels
         # scaled anchors are relative to width of a quadrant
         scaled_anchors = [(a_w / stride, a_h / stride, a_theta) for a_w, a_h, a_theta in self.anchors]
         anchor_w = FloatTensor(scaled_anchors).index_select(1, LongTensor([0]))
         anchor_h = FloatTensor(scaled_anchors).index_select(1, LongTensor([1]))
-        anchor_theta = FloatTensor(scaled_anchors).index_select(1, LongTensor([2]))
+        #anchor_theta = FloatTensor(scaled_anchors).index_select(1, LongTensor([2]))
         anchor_w = anchor_w.repeat(bs, 1).repeat(1, 1, g_dim*g_dim).view(w.shape)
         anchor_h = anchor_h.repeat(bs, 1).repeat(1, 1, g_dim*g_dim).view(h.shape)
-        anchor_theta = anchor_theta.repeat(bs, 1).repeat(1, 1, g_dim*g_dim).view(h.shape)
+        #anchor_theta = anchor_theta.repeat(bs, 1).repeat(1, 1, g_dim*g_dim).view(h.shape)
 
         # Calculate offsets for each grid
         # 0<x,y<13 
@@ -255,8 +257,8 @@ class SHOLOLayer(nn.Module):
         pred_boxes[..., 1] = (y.data + grid_y) * stride   
         pred_boxes[..., 2] = (torch.exp(w.data) * anchor_w) * stride  
         pred_boxes[..., 3] = (torch.exp(h.data) * anchor_h) * stride  
-        pred_boxes[..., 4] = anchor_theta + torch.atan(sin/cos) 
-        #pdb.set_trace()
+        #pred_boxes[..., 4] = anchor_theta + torch.atan(sin/cos) 
+        
         # Training
         if targets is not None:
 
@@ -264,7 +266,7 @@ class SHOLOLayer(nn.Module):
                 self.mse_loss = self.mse_loss.cuda()
                 self.bce_loss = self.bce_loss.cuda()
             #pdb.set_trace()
-            nGT, nCorrect, mask, conf_mask, tx, ty, tw, th, tsin, tcos, tconf, tcls = build_targets_oriented(
+            nGT, nCorrect, mask, conf_mask, tx, ty, tw, th, tconf, tcls = build_targets(
                                                                             pred_boxes.cpu().data,
                                                                             targets.cpu().data,
                                                                             self.anchors,
@@ -287,8 +289,8 @@ class SHOLOLayer(nn.Module):
             ty    = Variable(ty.type(FloatTensor), requires_grad=False)
             tw    = Variable(tw.type(FloatTensor), requires_grad=False)
             th    = Variable(th.type(FloatTensor), requires_grad=False)
-            tsin  = Variable(tsin.type(FloatTensor), requires_grad=False)
-            tcos  = Variable(tcos.type(FloatTensor), requires_grad=False)
+            #tsin  = Variable(tsin.type(FloatTensor), requires_grad=False)
+            #tcos  = Variable(tcos.type(FloatTensor), requires_grad=False)
             tconf = Variable(tconf.type(FloatTensor), requires_grad=False)
             tcls  = Variable(tcls.type(FloatTensor), requires_grad=False)
 
@@ -297,17 +299,18 @@ class SHOLOLayer(nn.Module):
             loss_y = self.lambda_coord * self.bce_loss(y * mask, ty * mask)
             loss_w = self.lambda_coord * self.mse_loss(w * mask, tw * mask) / 2
             loss_h = self.lambda_coord * self.mse_loss(h * mask, th * mask) / 2
-            loss_s = self.lambda_coord * self.bce_loss(0.5*(sin+1) * mask, 0.5*(tsin+1) * mask) 
-            loss_c = self.lambda_coord * self.bce_loss(cos * mask, tcos * mask) 
+            #loss_s = self.lambda_coord * self.bce_loss(0.5*(sin+1) * mask, 0.5*(tsin+1) * mask) 
+            #loss_c = self.lambda_coord * self.bce_loss(cos * mask, tcos * mask) 
             loss_conf = self.bce_loss(conf * conf_mask, tconf * conf_mask)
             loss_cls = self.bce_loss(pred_cls * cls_mask, tcls * cls_mask)
             loss = loss_x + loss_y + loss_w + loss_h + loss_s + loss_c + loss_conf + loss_cls
-            return loss, loss_x.item(), loss_y.item(), loss_w.item(), loss_h.item(), loss_s.item(), loss_c.item(), loss_conf.item(), loss_cls.item(), recall
+            #return loss, loss_x.item(), loss_y.item(), loss_w.item(), loss_h.item(), loss_s.item(), loss_c.item(), loss_conf.item(), loss_cls.item(), recall
+            return loss, loss_x.item(), loss_y.item(), loss_w.item(), loss_h.item(), loss_conf.item(), loss_cls.item(), recall
 
         else:
             # If not in training phase return predictions
-            #pdb.set_trace()
-            output = torch.cat((pred_boxes.view(bs, -1, 5), conf.view(bs, -1, 1), pred_cls.view(bs, -1, self.num_classes)), -1)
+            #output = torch.cat((pred_boxes.view(bs, -1,5), conf.view(bs, -1, 1), pred_cls.view(bs, -1, self.num_classes)), -1)
+            output = torch.cat((pred_boxes.view(bs, -1, 4), conf.view(bs, -1, 1), pred_cls.view(bs, -1, self.num_classes)), -1)
             return output.data
 
 class Darknet_Sholo(nn.Module):
@@ -319,7 +322,8 @@ class Darknet_Sholo(nn.Module):
         self.img_size = img_size
         self.seen = 0
         self.header_info = np.array([0, 0, 0, self.seen, 0],dtype=np.int32)
-        self.loss_names = ['x', 'y', 'w', 'h','sin','cos','conf', 'cls', 'recall']
+        #self.loss_names = ['x', 'y', 'w', 'h','sin','cos','conf', 'cls', 'recall']
+        self.loss_names = ['x', 'y', 'w', 'h','conf', 'cls', 'recall']
 
     def forward(self, x, targets=None):
         is_training = targets is not None
@@ -357,7 +361,7 @@ class Darknet_Sholo(nn.Module):
                 output.append(x)                
             layer_outputs.append(x)
 
-        #self.losses['recall'] /= 3
+        self.losses['recall'] /= 3
         return sum(output) if is_training else torch.cat(output, 1)
 
     def load_classifier_weights(self, weights_path, header_dtype=np.int32):

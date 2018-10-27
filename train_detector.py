@@ -16,7 +16,7 @@ import torch.optim as optim
 import torch.backends.cudnn as cudnn
 import numpy as np
 from pdb import set_trace
-sys.path.append('./PyTorch-YOLOv3_lite')
+sys.path.append('./PyTorch-YOLOv3_oglite')
 
 from matplotlib import pyplot as plt
 
@@ -25,24 +25,24 @@ from utils.utils import *
 from utils.datasets import *
 from utils.parse_config import *
 
-host = "floyd"
+host = "local"
 if host is "local":
-    args = ['--image_folder','../data_tiny/train',
-            '--box_file','../data_tiny/box_data.pickle',
-            '--model_config_path','./PyTorch-YOLOv3_lite/config/sholo_v1.cfg',
+    args = ['--image_folder','../data_bbox_only/train',
+            '--box_file','../data_bbox_only/box_data.pickle',
+            '--model_config_path','./PyTorch-YOLOv3_oglite/config/yolov3.cfg',
             '--checkpoint_dir','../detector_weights',
-            '--weights_path','../detector_weights/yolov3_initialized.weights',
+            '--weights_path','../detector_weights/mschwendeman-projects-airbus_ship_detection-88-output/9.weights',
             '--img_size','768',
             '--epochs','2',
-            '--n_cpu','4',
+            '--n_cpu','0',
             '--batch_size','1',
             '--use_cuda','True']
 elif host is "floyd":       
     args = ['--image_folder','/airbus/train',
             '--box_file','/airbus/box_data.pickle',
-            '--model_config_path','./PyTorch-YOLOv3_lite/config/sholo_v1.cfg',
+            '--model_config_path','./PyTorch-YOLOv3_oglite/config/yolov3.cfg',
             '--checkpoint_dir','/output',
-            '--weights_path','/weights/yolov3_initialized.weights',
+            '--weights_path','/weights/yolov3.weights',
             '--img_size','768',
             '--epochs','100',
             '--n_cpu','4',
@@ -79,14 +79,14 @@ decay           = float(hyperparams['decay'])
 #burn_in         = int(hyperparams['burn_in'])
 
 # Initiate model
-model = Darknet_Sholo(opt.model_config_path)
+model = Darknet(opt.model_config_path)
 model.apply(weights_init_normal)
-#model.load_classifier_weights(opt.weights_path, header_dtype=np.int32)
 #model.save_weights('%s/yolov3_initialized.weights' % (opt.checkpoint_dir))
-model.load_weights(opt.weights_path)
+model.load_weights(opt.weights_path, max_layer=None)
+#model.load_weights(opt.weights_path)
 if cuda:
     model = model.cuda()
-    cudnn.benchmark=True
+    #cudnn.benchmark=True
 model.train()
 
 # Get dataloader
@@ -107,11 +107,11 @@ running_loss_x = np.empty(100); running_loss_x[:] = np.nan
 running_loss_y = np.empty(100); running_loss_y[:] = np.nan
 running_loss_w = np.empty(100); running_loss_w[:] = np.nan
 running_loss_h = np.empty(100); running_loss_h[:] = np.nan
-running_loss_sin = np.empty(100); running_loss_sin[:] = np.nan
-running_loss_cos = np.empty(100); running_loss_cos[:] = np.nan
+#running_loss_sin = np.empty(100); running_loss_sin[:] = np.nan
+#running_loss_cos = np.empty(100); running_loss_cos[:] = np.nan
 running_loss_conf = np.empty(100); running_loss_conf[:] = np.nan
-running_loss_cls = np.empty(100); running_loss_cls[:] = np.nan
-
+#running_loss_cls = np.empty(100); running_loss_cls[:] = np.nan
+running_precision = np.empty(100); running_precision[:] = np.nan
 for epoch in range(opt.epochs):
     #loss_list = []
     for batch_i, (img_file, imgs, targets) in enumerate(dataloader):
@@ -123,17 +123,19 @@ for epoch in range(opt.epochs):
 
         loss.backward()
         optimizer.step()
+        #pdb.set_trace()
         #loss_list.append(loss.item())
         running_recall[:-1] = running_recall[1:]; running_recall[-1] = model.losses['recall']
+        running_precision[:-1] = running_precision[1:]; running_precision[-1] = model.losses['precision']
         running_loss[:-1] = running_loss[1:]; running_loss[-1] = loss.item()
         running_loss_x[:-1] = running_loss_x[1:]; running_loss_x[-1] = model.losses['x']
         running_loss_y[:-1] = running_loss_y[1:]; running_loss_y[-1] = model.losses['y']
         running_loss_w[:-1] = running_loss_w[1:]; running_loss_w[-1] = model.losses['w']
         running_loss_h[:-1] = running_loss_h[1:]; running_loss_h[-1] = model.losses['h']
-        running_loss_sin[:-1] = running_loss_sin[1:]; running_loss_sin[-1] = model.losses['sin']
-        running_loss_cos[:-1] = running_loss_cos[1:]; running_loss_cos[-1] = model.losses['cos']
+        #running_loss_sin[:-1] = running_loss_sin[1:]; running_loss_sin[-1] = model.losses['sin']
+        #running_loss_cos[:-1] = running_loss_cos[1:]; running_loss_cos[-1] = model.losses['cos']
         running_loss_conf[:-1] = running_loss_conf[1:]; running_loss_conf[-1] = model.losses['conf']
-        running_loss_cls[:-1] = running_loss_cls[1:]; running_loss_cls[-1] = model.losses['cls']
+        #running_loss_cls[:-1] = running_loss_cls[1:]; running_loss_cls[-1] = model.losses['cls']
         #print('[Epoch %d/%d, Batch %d/%d] [Losses: x %f, y %f, w %f, h %f, sin %f, cos %f, conf %f, cls %f, total %f, recall: %.5f]' %
         #                            (epoch, opt.epochs, batch_i, len(dataloader),
         #                            model.losses['x'], model.losses['y'], model.losses['w'],
@@ -146,13 +148,14 @@ for epoch in range(opt.epochs):
         print('{{"metric": "log_loss", "value": {}}}'.format(np.log10(np.nanmean(running_loss))))
         print('{{"metric": "loss_x", "value": {}}}'.format(np.nanmean(running_loss_x)))
         print('{{"metric": "loss_y", "value": {}}}'.format(np.nanmean(running_loss_y)))
-        print('{{"metric": "loss_w", "value": {}}}'.format(np.log10(np.nanmean(running_loss_w))))
-        print('{{"metric": "loss_h", "value": {}}}'.format(np.log10(np.nanmean(running_loss_h))))
-        print('{{"metric": "loss_sin", "value": {}}}'.format(np.nanmean(running_loss_sin)))
-        print('{{"metric": "loss_cos", "value": {}}}'.format(np.nanmean(running_loss_cos)))
-        print('{{"metric": "loss_conf", "value": {}}}'.format(np.log10(np.nanmean(running_loss_conf))))
-        print('{{"metric": "loss_class", "value": {}}}'.format(np.nanmean(running_loss_cls)))
+        print('{{"metric": "loss_w", "value": {}}}'.format(np.nanmean(running_loss_w)))
+        print('{{"metric": "loss_h", "value": {}}}'.format(np.nanmean(running_loss_h)))
+        #print('{{"metric": "loss_sin", "value": {}}}'.format(np.nanmean(running_loss_sin)))
+        #print('{{"metric": "loss_cos", "value": {}}}'.format(np.nanmean(running_loss_cos)))
+        print('{{"metric": "loss_conf", "value": {}}}'.format(np.nanmean(running_loss_conf)))
+        #print('{{"metric": "loss_class", "value": {}}}'.format(np.nanmean(running_loss_cls)))
         print('{{"metric": "recall ", "value": {}}}'.format(np.nanmean(running_recall)))
+        print('{{"metric": "precision ", "value": {}}}'.format(np.nanmean(running_precision)))
 
         model.seen += imgs.size(0)
         if batch_i == 1000:

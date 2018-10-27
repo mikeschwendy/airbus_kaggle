@@ -291,7 +291,7 @@ def build_targets_oriented(pred_boxes, target, anchors, num_anchors, num_classes
             gy = target[b, t, 2] 
             gw = target[b, t, 3] 
             gh = target[b, t, 4] 
-            gtheta = target[b, t, 5]
+            #gtheta = target[b, t, 5]
             # Convert to position relative to box
             gx_scaled = gx * dim/img_dim
             gy_scaled = gy * dim/img_dim
@@ -301,7 +301,8 @@ def build_targets_oriented(pred_boxes, target, anchors, num_anchors, num_classes
             gi = int(gx_scaled)
             gj = int(gy_scaled)
             # Get shape of gt box
-            gt_box = torch.FloatTensor(np.array([img_dim/2, img_dim/2, gw, gh, gtheta])).unsqueeze(0)
+            #gt_box = torch.FloatTensor(np.array([img_dim/2, img_dim/2, gw, gh, gtheta])).unsqueeze(0)
+            gt_box = torch.FloatTensor(np.array([img_dim/2, img_dim/2, gw, gh, 0])).unsqueeze(0)
             # Get shape of anchor box
             anchor_shapes = torch.FloatTensor(np.concatenate((img_dim/2*np.ones((len(anchors), 2)), np.array(anchors)), 1))
             # Calculate iou between gt and anchor shapes
@@ -324,13 +325,9 @@ def build_targets_oriented(pred_boxes, target, anchors, num_anchors, num_classes
             tw[b, best_n, gj, gi] = math.log(gw/anchors[best_n][0] + 1e-16)
             th[b, best_n, gj, gi] = math.log(gh/anchors[best_n][1] + 1e-16)
             # Sin and Cos
-            delta_theta = gtheta - anchors[best_n][2]
-            #if delta_theta < -math.pi/2:
-            #    delta_theta += math.pi
-            #elif delta_theta > math.pi/2:
-            #    delta_theta += -math.pi
-            ts[b, best_n, gj, gi] = math.sin(delta_theta)
-            tc[b, best_n, gj, gi] = math.cos(delta_theta)
+            #delta_theta = gtheta - anchors[best_n][2]
+            #ts[b, best_n, gj, gi] = math.sin(delta_theta)
+            #tc[b, best_n, gj, gi] = math.cos(delta_theta)
             # One-hot encoding of label
             tcls[b, best_n, gj, gi, int(target[b, t, 0])] = 0
             # Calculate iou between ground truth and best matching prediction
